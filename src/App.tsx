@@ -484,7 +484,7 @@ function MainApp() {
       
     } catch (error: any) {
       console.error("Failed to generate plan", error);
-      handleGeminiError(error);
+      Gemini
     } finally {
       setLoading(false);
       setLoadingType(null);
