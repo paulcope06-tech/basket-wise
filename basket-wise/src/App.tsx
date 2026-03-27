@@ -397,20 +397,47 @@ function MainApp() {
     }
   };
 
-  const handleRegenerateMeal = async () => {
-    if (!selectedMealInfo || !user) return;
-    setLoading(true);
-    setLoadingType('single');
-    try {
-      const newRecipe = await regenerateSingleMeal(
-        selectedMealInfo.day,
-        selectedMealInfo.type,
-        filters,
-        budget,
-        adults,
-        children,
-        profiles
-      );
+  const handleGeneratePlan = async () => {
+  if (!user) return;
+
+  setLoading(true);
+  setLoadingType('generate');
+
+  try {
+    const { data, error } = await supabase.functions.invoke('generate-recipe', {
+      body: {
+        prompt: 'Create a simple affordable family recipe with a generated photo.'
+      }
+    });
+
+    console.log('FUNCTION DATA:', data);
+    console.log('FUNCTION ERROR:', error);
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data?.success) {
+      throw new Error(data?.error || 'Recipe generation failed');
+    }
+
+    await fetchRecipes();
+
+    setToast({
+      message: 'Recipe generated and saved to Supabase!',
+      type: 'success'
+    });
+  } catch (error: any) {
+    console.error('Failed to generate recipe', error);
+    setToast({
+      message: error.message || 'Failed to generate recipe',
+      type: 'error'
+    });
+  } finally {
+    setLoading(false);
+    setLoadingType(null);
+  }
+};
       
       // Update local state
       const newPlan = mealPlan.map(m => 
