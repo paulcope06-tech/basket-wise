@@ -450,7 +450,7 @@ function MainApp() {
 
   try {
     const { data, error } = await supabase.functions.invoke(
-  'generate-meal-plan-v2'
+  'meal-plan-final-v1'
 );
 
     console.log('EDGE FUNCTION DATA:', data);
