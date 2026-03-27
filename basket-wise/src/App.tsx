@@ -38,7 +38,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from './lib/supabase';
 import { apiFetch } from './lib/api';
 import { MealPlanItem, Recipe, MealType, Review, Favorite, UserProfile } from './types';
-import { generateWeeklyPlan, comparePrices, regenerateSingleMeal } from './services/gemini';
+import { comparePrices } from './services/gemini';
 
 // App Constants
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
