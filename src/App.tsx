@@ -450,8 +450,8 @@ function MainApp() {
 
   try {
     const { data, error } = await supabase.functions.invoke(
-      'generate-images-for-all-recipes'
-    );
+  'generate-meal-plan-v2'
+);
 
     console.log('EDGE FUNCTION DATA:', data);
     console.log('EDGE FUNCTION ERROR:', error);
