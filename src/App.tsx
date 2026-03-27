@@ -443,12 +443,18 @@ function MainApp() {
   setLoading(true);
 
   try {
+    const handleGeneratePlan = async () => {
+  if (!user) return;
+
+  setLoading(true);
+
+  try {
     const { data, error } = await supabase.functions.invoke(
       'generate-images-for-all-recipes'
     );
 
-    console.log('DATA:', data);
-    console.log('ERROR:', error);
+    console.log('EDGE FUNCTION DATA:', data);
+    console.log('EDGE FUNCTION ERROR:', error);
 
     if (error) throw error;
 
@@ -456,16 +462,15 @@ function MainApp() {
       message: 'Recipes generated!',
       type: 'success'
     });
-
-  } catch (err: any) {
-    console.error(err);
-
+  } catch (error: any) {
+    console.error('Failed to generate plan', error);
     setToast({
-      message: err.message || 'Failed to call function',
+      message: error.message || 'Failed to call function',
       type: 'error'
     });
   } finally {
     setLoading(false);
+    setLoadingType(null);
   }
 };
       
