@@ -438,19 +438,36 @@ function MainApp() {
   };
 
   const handleGeneratePlan = async () => {
-    if (!user) return;
-    setLoading(true);
-    setLoadingType('plan');
-    try {
-      const activeProfiles = profiles.filter(p => p.isActive);
-      const newPlan = await generateWeeklyPlan(
-        filters, 
-        budget, 
-        adults, 
-        children, 
-        favorites.map(f => f.recipe),
-        activeProfiles
-      );
+  if (!user) return;
+
+  setLoading(true);
+
+  try {
+    const { data, error } = await supabase.functions.invoke(
+      'generate-images-for-all-recipes'
+    );
+
+    console.log('DATA:', data);
+    console.log('ERROR:', error);
+
+    if (error) throw error;
+
+    setToast({
+      message: 'Recipes generated!',
+      type: 'success'
+    });
+
+  } catch (err: any) {
+    console.error(err);
+
+    setToast({
+      message: err.message || 'Failed to call function',
+      type: 'error'
+    });
+  } finally {
+    setLoading(false);
+  }
+};
       
       if (user) {
         await apiFetch('/api/meal-plan', {
