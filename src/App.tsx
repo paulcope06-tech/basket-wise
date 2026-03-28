@@ -449,9 +449,15 @@ function MainApp() {
   setLoading(true);
 
   try {
+    const handleGeneratePlan = async () => {
+  if (!user) return;
+
+  setLoading(true);
+
+  try {
     const { data, error } = await supabase.functions.invoke(
-  'meal-plan-final-v1'
-);
+      'meal-plan-final-v1'
+    );
 
     console.log('EDGE FUNCTION DATA:', data);
     console.log('EDGE FUNCTION ERROR:', error);
@@ -459,19 +465,23 @@ function MainApp() {
     if (error) throw error;
 
     setToast({
-      message: 'Recipes generated!',
+      message: 'Meal plan generated!',
       type: 'success'
     });
-  } catch (error: any) {
-    console.error('Failed to generate plan', error);
+
+  } catch (err: any) {
+    console.error(err);
+
     setToast({
-      message: error.message || 'Failed to call function',
+      message: err.message || 'Failed to send a request to the Edge Function',
       type: 'error'
     });
+
   } finally {
     setLoading(false);
     setLoadingType(null);
   }
+};
 };
       
       if (user) {
