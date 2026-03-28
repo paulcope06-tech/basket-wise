@@ -4,22 +4,11 @@ import { supabase } from './lib/supabase';
 
 type MealType = 'breakfast' | 'lunch' | 'dinner';
 
-type DbRecipe = {
-  title?: string;
-  name?: string;
-  recipeName?: string;
-  description?: string;
-  ingredients?: any[];
-  instructions?: string[] | string;
-  method?: string[];
-  prepTime?: number;
-  cookTime?: number;
-  prep_time?: number;
-  cook_time?: number;
-  servings?: number;
-  estimated_cost?: number;
-  imageUrl?: string;
-  image_url?: string;
+type Ingredient = {
+  name: string;
+  amount: string;
+  unit: string;
+  category: string;
 };
 
 type AppRecipe = {
@@ -28,9 +17,10 @@ type AppRecipe = {
   prepTime: number;
   cookTime: number;
   costPerServing: number;
-  ingredients: { name: string; amount: string; unit: string; category: string }[];
-  instructions: string[];
+  estimatedCost: number;
   servings: number;
+  ingredients: Ingredient[];
+  instructions: string[];
   imageUrl: string;
 };
 
@@ -43,62 +33,6 @@ type MealPlanItem = {
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
 
-function toAppRecipe(dbRecipe: DbRecipe): AppRecipe {
-  const instructions =
-    Array.isArray(dbRecipe.instructions)
-      ? dbRecipe.instructions
-      : Array.isArray(dbRecipe.method)
-      ? dbRecipe.method
-      : typeof dbRecipe.instructions === 'string'
-      ? dbRecipe.instructions
-          .split(/\d+\.\s+/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : ['No instructions available'];
-
-  const ingredients = Array.isArray(dbRecipe.ingredients)
-    ? dbRecipe.ingredients.map((ing: any) => ({
-        name: ing?.name || 'Ingredient',
-        amount: String(ing?.amount ?? '1'),
-        unit: ing?.unit || '',
-        category: ing?.category || 'Cupboard',
-      }))
-    : [{ name: 'Ingredients not provided', amount: '1', unit: '', category: 'Cupboard' }];
-
-  return {
-    title: dbRecipe.title || dbRecipe.name || dbRecipe.recipeName || 'Generated Recipe',
-    description: dbRecipe.description || '',
-    prepTime: Number(dbRecipe.prepTime ?? dbRecipe.prep_time ?? 10),
-    cookTime: Number(dbRecipe.cookTime ?? dbRecipe.cook_time ?? 20),
-    costPerServing: Number(dbRecipe.estimated_cost ?? 2.5),
-    ingredients,
-    instructions,
-    servings: Number(dbRecipe.servings ?? 4),
-    imageUrl: dbRecipe.imageUrl || dbRecipe.image_url || '',
-  };
-}
-
-function buildMealPlanFromRecipes(recipes: DbRecipe[]): MealPlanItem[] {
-  const slots: MealPlanItem[] = [];
-  let index = 0;
-
-  for (let day = 0; day < DAYS.length; day++) {
-    for (const mealType of MEAL_TYPES) {
-      const recipe = recipes[index];
-      if (recipe) {
-        slots.push({
-          day,
-          mealType,
-          recipe: toAppRecipe(recipe),
-        });
-      }
-      index++;
-    }
-  }
-
-  return slots;
-}
-
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -108,13 +42,16 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [budget, setBudget] = useState(60);
-  const [adults, setAdults] = useState(2);
-  const [children, setChildren] = useState(2);
+  const [budget] = useState(60);
+  const [adults] = useState(2);
+  const [children] = useState(2);
 
   const [mealPlan, setMealPlan] = useState<MealPlanItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const [selectedRecipe, setSelectedRecipe] = useState<AppRecipe | null>(null);
+  const [selectedMealInfo, setSelectedMealInfo] = useState<{ day: number; type: MealType } | null>(null);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -143,6 +80,12 @@ export default function App() {
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    if (user && isAuthReady) {
+      fetchMealPlanItems();
+    }
+  }, [user, isAuthReady]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,10 +124,84 @@ export default function App() {
     await supabase.auth.signOut();
     setUser(null);
     setMealPlan([]);
+    setSelectedRecipe(null);
+    setSelectedMealInfo(null);
     setToast({ message: 'Logged out.', type: 'success' });
   };
 
-  const generateSingleRecipe = async (prompt: string): Promise<DbRecipe> => {
+  const mapRecipeFromRow = (item: any): AppRecipe => {
+    const rawRecipe = item?.recipe || {};
+
+    const instructions = Array.isArray(rawRecipe?.instructions)
+      ? rawRecipe.instructions
+      : Array.isArray(rawRecipe?.method)
+      ? rawRecipe.method
+      : typeof rawRecipe?.instructions === 'string'
+      ? rawRecipe.instructions
+          .split(/\d+\.\s+/)
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      : ['No instructions available'];
+
+    const ingredients = Array.isArray(rawRecipe?.ingredients)
+      ? rawRecipe.ingredients.map((ing: any) => ({
+          name: ing?.name || 'Ingredient',
+          amount: String(ing?.amount ?? '1'),
+          unit: ing?.unit || '',
+          category: ing?.category || 'Cupboard',
+        }))
+      : [];
+
+    const estimatedCost = Number(rawRecipe?.estimated_cost ?? rawRecipe?.estimatedCost ?? 2.5);
+
+    return {
+      title: rawRecipe?.title || item?.recipe_title || 'Untitled Recipe',
+      description: rawRecipe?.description || '',
+      prepTime: Number(rawRecipe?.prepTime ?? rawRecipe?.prep_time ?? 10),
+      cookTime: Number(rawRecipe?.cookTime ?? rawRecipe?.cook_time ?? 20),
+      costPerServing: estimatedCost,
+      estimatedCost,
+      servings: Number(rawRecipe?.servings ?? 4),
+      ingredients,
+      instructions,
+      imageUrl: rawRecipe?.imageUrl || rawRecipe?.image_url || '',
+    };
+  };
+
+  const fetchMealPlanItems = async () => {
+    const { data, error } = await supabase
+      .from('meal_plan_items')
+      .select('day, meal_type, recipe_title, recipe, created_at')
+      .order('day', { ascending: true })
+      .order('created_at', { ascending: false });
+
+    console.log('MEAL PLAN ITEMS:', data);
+    console.log('MEAL PLAN ITEMS ERROR:', error);
+
+    if (error) {
+      setToast({ message: 'Failed to load meal plan.', type: 'error' });
+      return;
+    }
+
+    const latestBySlot = new Map<string, any>();
+
+    for (const item of data || []) {
+      const key = `${item.day}-${item.meal_type}`;
+      if (!latestBySlot.has(key)) {
+        latestBySlot.set(key, item);
+      }
+    }
+
+    const mapped: MealPlanItem[] = Array.from(latestBySlot.values()).map((item: any) => ({
+      day: item.day,
+      mealType: item.meal_type,
+      recipe: mapRecipeFromRow(item),
+    }));
+
+    setMealPlan(mapped);
+  };
+
+  const generateSingleRecipe = async (prompt: string) => {
     const { data, error } = await supabase.functions.invoke('generate-recipe', {
       body: { prompt },
     });
@@ -196,11 +213,8 @@ export default function App() {
     if (!data?.success) {
       throw new Error(data?.error || 'Recipe generation failed');
     }
-    if (!data?.recipe) {
-      throw new Error('No recipe returned');
-    }
 
-    return data.recipe as DbRecipe;
+    return data;
   };
 
   const handleGeneratePlan = async () => {
@@ -209,20 +223,20 @@ export default function App() {
     setLoading(true);
 
     try {
-      const generatedResults: DbRecipe[] = [];
-
       for (let day = 0; day < DAYS.length; day++) {
         for (const mealType of MEAL_TYPES) {
-          const prompt = `Create one ${mealType} recipe for ${DAYS[day]} for a family of ${adults} adults and ${children} children, with a total weekly budget of £${budget}. Return valid JSON only with these fields: title, description, ingredients, instructions, prepTime, cookTime, servings.`;
+          const prompt = `Create one ${mealType} recipe for ${DAYS[day]} for a family of ${adults} adults and ${children} children, with a total weekly budget of £${budget}. Return valid JSON only with these fields: title, description, ingredients, instructions, prep_time, cook_time, servings, estimated_cost, image_url.`;
 
-          const recipe = await generateSingleRecipe(prompt);
-          generatedResults.push(recipe);
+          await generateSingleRecipe(prompt);
         }
       }
 
-      console.log('GENERATED RESULTS:', generatedResults);
-      setMealPlan(buildMealPlanFromRecipes(generatedResults));
-      setToast({ message: 'Weekly plan generated successfully.', type: 'success' });
+      await fetchMealPlanItems();
+
+      setToast({
+        message: 'Weekly plan generated successfully.',
+        type: 'success',
+      });
     } catch (err: any) {
       console.error('Failed to generate plan', err);
       setToast({ message: err?.message || 'Failed to generate plan.', type: 'error' });
@@ -409,7 +423,7 @@ export default function App() {
                   return (
                     <div
                       key={type}
-                      className={`p-3 rounded-2xl border h-36 flex flex-col justify-between ${
+                      className={`p-3 rounded-2xl border h-40 flex flex-col justify-between ${
                         meal
                           ? 'bg-white border-[#dcfce7] shadow-sm'
                           : 'border-2 border-dashed border-[#dcfce7] opacity-60'
@@ -425,9 +439,21 @@ export default function App() {
                       </div>
 
                       {meal && (
-                        <div className="flex items-center gap-2 text-[11px] text-[#15803d]/70 mt-3">
-                          <Clock size={12} />
-                          <span>{meal.recipe.prepTime + meal.recipe.cookTime}m</span>
+                        <div className="mt-3 space-y-2">
+                          <div className="flex items-center gap-2 text-[11px] text-[#15803d]/70">
+                            <Clock size={12} />
+                            <span>{meal.recipe.prepTime + meal.recipe.cookTime}m</span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              setSelectedRecipe(meal.recipe);
+                              setSelectedMealInfo({ day: dayIdx, type });
+                            }}
+                            className="w-full bg-[#15803d]/5 border border-[#15803d]/20 px-2 py-2 rounded-xl text-[11px] font-bold text-[#15803d] hover:bg-[#15803d] hover:text-white transition-colors"
+                          >
+                            Click for recipe
+                          </button>
                         </div>
                       )}
                     </div>
@@ -438,6 +464,99 @@ export default function App() {
           ))}
         </div>
       </main>
+
+      {selectedRecipe && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => {
+              setSelectedRecipe(null);
+              setSelectedMealInfo(null);
+            }}
+          />
+
+          <div className="relative bg-white w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl p-8 z-10">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-3xl font-serif font-bold mb-2">{selectedRecipe.title}</h2>
+                <p className="text-[#15803d]/70">{selectedRecipe.description}</p>
+                {selectedMealInfo && (
+                  <p className="text-xs text-[#15803d]/50 mt-2 uppercase tracking-widest font-bold">
+                    {DAYS[selectedMealInfo.day]} • {selectedMealInfo.type}
+                  </p>
+                )}
+              </div>
+
+              <button
+                onClick={() => {
+                  setSelectedRecipe(null);
+                  setSelectedMealInfo(null);
+                }}
+                className="px-4 py-2 rounded-full bg-[#f0fdf4] hover:bg-[#dcfce7]"
+              >
+                Close
+              </button>
+            </div>
+
+            {selectedRecipe.imageUrl && (
+              <div className="mb-8">
+                <img
+                  src={selectedRecipe.imageUrl}
+                  alt={selectedRecipe.title}
+                  className="w-full h-72 object-cover rounded-2xl border border-[#dcfce7]"
+                />
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+              <div className="bg-[#f0fdf4] p-4 rounded-2xl">
+                <p className="text-[10px] uppercase font-bold text-[#15803d]/60">Prep Time</p>
+                <p className="font-bold">{selectedRecipe.prepTime} mins</p>
+              </div>
+              <div className="bg-[#f0fdf4] p-4 rounded-2xl">
+                <p className="text-[10px] uppercase font-bold text-[#15803d]/60">Cook Time</p>
+                <p className="font-bold">{selectedRecipe.cookTime} mins</p>
+              </div>
+              <div className="bg-[#f0fdf4] p-4 rounded-2xl">
+                <p className="text-[10px] uppercase font-bold text-[#15803d]/60">Servings</p>
+                <p className="font-bold">{selectedRecipe.servings}</p>
+              </div>
+              <div className="bg-[#f0fdf4] p-4 rounded-2xl">
+                <p className="text-[10px] uppercase font-bold text-[#15803d]/60">Estimated Cost</p>
+                <p className="font-bold">£{Number(selectedRecipe.estimatedCost || 0).toFixed(2)}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div>
+                <h3 className="font-bold text-lg mb-3 border-b border-[#dcfce7] pb-2">Ingredients</h3>
+                <ul className="space-y-2">
+                  {selectedRecipe.ingredients?.map((ing, idx) => (
+                    <li key={idx} className="flex justify-between text-sm">
+                      <span>{ing.name}</span>
+                      <span className="text-[#15803d]/60">
+                        {ing.amount} {ing.unit}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="font-bold text-lg mb-3 border-b border-[#dcfce7] pb-2">Instructions</h3>
+                <ol className="space-y-3">
+                  {selectedRecipe.instructions?.map((step, idx) => (
+                    <li key={idx} className="flex gap-3 text-sm">
+                      <span className="font-bold text-[#15803d]">{idx + 1}.</span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div
