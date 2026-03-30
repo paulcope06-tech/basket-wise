@@ -56,7 +56,9 @@ export default function App() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const [selectedRecipe, setSelectedRecipe] = useState<AppRecipe | null>(null);
-  const [selectedMealInfo, setSelectedMealInfo] = useState<{ day: number; type: MealType } | null>(null);
+  const [selectedMealInfo, setSelectedMealInfo] = useState<{ day: number; type: MealType } | null>(
+    null
+  );
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -245,9 +247,12 @@ export default function App() {
   };
 
   const handleGeneratePlan = async () => {
-    if (!user) return;
+    if (!user || loading) return;
 
     setLoading(true);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
       const token = await getAccessToken();
@@ -265,7 +270,10 @@ export default function App() {
             children,
           },
         }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
 
       const data = await res.json();
 
@@ -275,6 +283,7 @@ export default function App() {
 
       if (Array.isArray(data?.items)) {
         const mapped: MealPlanItem[] = data.items.map((item: any) => ({
+          id: item.id,
           day: Number(item.day),
           mealType: item.mealType,
           recipeId: item.recipeId,
@@ -292,8 +301,15 @@ export default function App() {
       });
     } catch (err: any) {
       console.error('Failed to generate plan', err);
-      setToast({ message: err?.message || 'Failed to generate plan.', type: 'error' });
+      setToast({
+        message:
+          err?.name === 'AbortError'
+            ? 'Request timed out. Check the backend route.'
+            : err?.message || 'Failed to generate plan.',
+        type: 'error',
+      });
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   };
@@ -431,7 +447,7 @@ export default function App() {
           <div className="bg-white rounded-3xl p-8 shadow-2xl text-center">
             <RefreshCw className="animate-spin text-[#15803d] mx-auto mb-4" size={36} />
             <p className="font-bold text-lg">Generating your meal plan...</p>
-            <p className="text-sm text-[#15803d]/70 mt-2">This should be much faster now.</p>
+            <p className="text-sm text-[#15803d]/70 mt-2">Please wait a few seconds.</p>
           </div>
         </div>
       )}

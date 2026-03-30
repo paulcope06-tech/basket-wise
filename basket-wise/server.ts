@@ -484,14 +484,7 @@ async function startServer() {
     checkSubscription,
     async (req: any, res) => {
       try {
-        console.log("generate route hit");
-
-        const { preferences = {} } = req.body;
-        console.log("preferences", preferences);
-
         const { data: recipes, error } = await supabase.from("recipes").select("*");
-
-        console.log("recipes fetched", recipes?.length, error);
 
         if (error) {
           return res.status(500).json({ error: error.message });
@@ -510,12 +503,6 @@ async function startServer() {
         const dinners = recipes.filter(
           (r: any) => String(r.meal_type).toLowerCase() === "dinner"
         );
-
-        console.log("grouped", {
-          breakfasts: breakfasts.length,
-          lunches: lunches.length,
-          dinners: dinners.length,
-        });
 
         if (breakfasts.length < 7 || lunches.length < 7 || dinners.length < 7) {
           return res.status(400).json({
