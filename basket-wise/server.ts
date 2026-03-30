@@ -452,8 +452,161 @@ async function startServer() {
     }
   });
 
-  app.post("/api/meal-plan", authenticate, checkSubscription, async (req: any, res) => {
+  app.post(
+  "/api/generate-meal-plan",
+  authenticate,
+  checkSubscription,
+  async (req: any, res) => {
     try {
+      console.log("1. generate route hit");
+
+      const { preferences = {} } = req.body;
+      const maxBudget = Number(preferences?.budget ?? 0);
+      console.log("2. preferences received", preferences);
+
+      let query = supabase.from("recipes").select("*");
+      console.log("3. querying recipes");
+
+      query = query.eq("is_active", true);
+
+      const { data: recipes, error } = await query;
+      console.log("4. recipes query finished", { count: recipes?.length, error });
+
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      if (!recipes || recipes.length === 0) {
+        return res.status(400).json({ error: "No recipes found in library" });
+      }
+
+      const breakfasts = recipes.filter(
+        (r: any) => String(r.meal_type).toLowerCase() === "breakfast"
+      );
+      const lunches = recipes.filter(
+        (r: any) => String(r.meal_type).toLowerCase() === "lunch"
+      );
+      const dinners = recipes.filter(
+        (r: any) => String(r.meal_type).toLowerCase() === "dinner"
+      );
+
+      console.log("5. grouped recipes", {
+        breakfasts: breakfasts.length,
+        lunches: lunches.length,
+        dinners: dinners.length,
+      });
+
+      const selectedBreakfasts = pickUniqueRecipes(
+        maxBudget > 0
+          ? breakfasts.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
+          : breakfasts,
+        7
+      );
+
+      const selectedLunches = pickUniqueRecipes(
+        maxBudget > 0
+          ? lunches.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
+          : lunches,
+        7
+      );
+
+      const selectedDinners = pickUniqueRecipes(
+        maxBudget > 0
+          ? dinners.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
+          : dinners,
+        7
+      );
+
+      console.log("6. recipes selected");
+
+      const planId = uuidv4();
+      const now = new Date().toISOString();
+
+      const { error: planError } = await supabase.from("meal_plan").insert({
+        id: planId,
+        user_id: req.userId,
+        name: "Weekly Meal Plan",
+        created_at: now,
+      });
+
+      console.log("7. meal_plan insert done", { planError });
+
+      if (planError) {
+        return res.status(500).json({ error: planError.message });
+      }
+
+      const items = [];
+
+      for (let day = 0; day < 7; day++) {
+        items.push({
+          id: uuidv4(),
+          plan_id: planId,
+          day,
+          meal_type: "breakfast",
+          recipe_id: selectedBreakfasts[day].id,
+          created_at: now,
+        });
+
+        items.push({
+          id: uuidv4(),
+          plan_id: planId,
+          day,
+          meal_type: "lunch",
+          recipe_id: selectedLunches[day].id,
+          created_at: now,
+        });
+
+        items.push({
+          id: uuidv4(),
+          plan_id: planId,
+          day,
+          meal_type: "dinner",
+          recipe_id: selectedDinners[day].id,
+          created_at: now,
+        });
+      }
+
+      console.log("8. inserting meal_plan_items", items.length);
+
+      const { error: itemsError } = await supabase
+        .from("meal_plan_items")
+        .insert(items);
+
+      console.log("9. meal_plan_items insert done", { itemsError });
+
+      if (itemsError) {
+        return res.status(500).json({ error: itemsError.message });
+      }
+
+      const result = items.map((item: any) => {
+        let recipe: any = null;
+
+        if (item.meal_type === "breakfast") recipe = selectedBreakfasts[item.day];
+        else if (item.meal_type === "lunch") recipe = selectedLunches[item.day];
+        else recipe = selectedDinners[item.day];
+
+        return {
+          day: item.day,
+          mealType: item.meal_type,
+          recipeId: item.recipe_id,
+          recipe: normalizeRecipe(recipe),
+        };
+      });
+
+      console.log("10. sending success response");
+      res.json({
+        success: true,
+        planId,
+        items: result,
+      });
+    } catch (err: any) {
+      console.error("generate route crashed:", err);
+      res.status(500).json({
+        error: err?.message || "Failed to generate meal plan",
+      });
+    }
+  }
+);
       const { items, name, startDate, endDate } = req.body;
 
       if (!Array.isArray(items)) {
@@ -509,7 +662,7 @@ async function startServer() {
         let query = supabase.from("recipes").select("*");
 
         // If your recipes table has is_active, this will help.
-        query = query.eq("is_active", true);
+       const { data: recipes, error } = await supabase.from("recipes").select("*");
 
         const { data: recipes, error } = await query;
 
