@@ -28,18 +28,6 @@ const __dirname = path.dirname(__filename);
 
 type MealType = "breakfast" | "lunch" | "dinner";
 
-const DAYS = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-];
-
-const MEAL_TYPES: MealType[] = ["breakfast", "lunch", "dinner"];
-
 function shuffleArray<T>(items: T[]) {
   const arr = [...items];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -51,14 +39,14 @@ function shuffleArray<T>(items: T[]) {
 
 function pickUniqueRecipes(recipes: any[], count: number) {
   if (recipes.length < count) {
-    throw new Error(
-      `Not enough recipes. Needed ${count}, found ${recipes.length}.`
-    );
+    throw new Error(`Not enough recipes. Needed ${count}, found ${recipes.length}.`);
   }
   return shuffleArray(recipes).slice(0, count);
 }
 
 function normalizeRecipe(recipe: any) {
+  if (!recipe) return null;
+
   return {
     id: recipe.id,
     title: recipe.title || "Untitled Recipe",
@@ -135,12 +123,10 @@ async function startServer() {
       } = await supabase.auth.getUser(token);
 
       if (error || !user) {
-        if (error) {
-          console.error("Supabase Auth error:", error.message, error.status);
-        }
-        return res
-          .status(401)
-          .json({ error: "Invalid token", details: error?.message });
+        return res.status(401).json({
+          error: "Invalid token",
+          details: error?.message,
+        });
       }
 
       req.userId = user.id;
@@ -148,9 +134,7 @@ async function startServer() {
       next();
     } catch (err) {
       console.error("Authentication middleware crash:", err);
-      res
-        .status(500)
-        .json({ error: "Internal server error during authentication" });
+      res.status(500).json({ error: "Internal server error during authentication" });
     }
   };
 
@@ -281,9 +265,7 @@ async function startServer() {
           ...p,
           dietaryPreference: p.dietary_preference,
           allergies:
-            typeof p.allergies === "string"
-              ? JSON.parse(p.allergies)
-              : p.allergies || [],
+            typeof p.allergies === "string" ? JSON.parse(p.allergies) : p.allergies || [],
           dislikedIngredients:
             typeof p.disliked_ingredients === "string"
               ? JSON.parse(p.disliked_ingredients)
@@ -299,8 +281,7 @@ async function startServer() {
 
   app.post("/api/profiles", authenticate, async (req: any, res) => {
     try {
-      const { name, dietaryPreference, allergies, dislikedIngredients, isActive } =
-        req.body;
+      const { name, dietaryPreference, allergies, dislikedIngredients, isActive } = req.body;
 
       const profile = {
         id: uuidv4(),
@@ -334,8 +315,7 @@ async function startServer() {
 
   app.put("/api/profiles/:id", authenticate, async (req: any, res) => {
     try {
-      const { name, dietaryPreference, allergies, dislikedIngredients, isActive } =
-        req.body;
+      const { name, dietaryPreference, allergies, dislikedIngredients, isActive } = req.body;
 
       const { error } = await supabase
         .from("profiles")
@@ -452,161 +432,8 @@ async function startServer() {
     }
   });
 
-  app.post(
-  "/api/generate-meal-plan",
-  authenticate,
-  checkSubscription,
-  async (req: any, res) => {
+  app.post("/api/meal-plan", authenticate, checkSubscription, async (req: any, res) => {
     try {
-      console.log("1. generate route hit");
-
-      const { preferences = {} } = req.body;
-      const maxBudget = Number(preferences?.budget ?? 0);
-      console.log("2. preferences received", preferences);
-
-      let query = supabase.from("recipes").select("*");
-      console.log("3. querying recipes");
-
-      query = query.eq("is_active", true);
-
-      const { data: recipes, error } = await query;
-      console.log("4. recipes query finished", { count: recipes?.length, error });
-
-      if (error) {
-        return res.status(500).json({ error: error.message });
-      }
-
-      if (!recipes || recipes.length === 0) {
-        return res.status(400).json({ error: "No recipes found in library" });
-      }
-
-      const breakfasts = recipes.filter(
-        (r: any) => String(r.meal_type).toLowerCase() === "breakfast"
-      );
-      const lunches = recipes.filter(
-        (r: any) => String(r.meal_type).toLowerCase() === "lunch"
-      );
-      const dinners = recipes.filter(
-        (r: any) => String(r.meal_type).toLowerCase() === "dinner"
-      );
-
-      console.log("5. grouped recipes", {
-        breakfasts: breakfasts.length,
-        lunches: lunches.length,
-        dinners: dinners.length,
-      });
-
-      const selectedBreakfasts = pickUniqueRecipes(
-        maxBudget > 0
-          ? breakfasts.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
-          : breakfasts,
-        7
-      );
-
-      const selectedLunches = pickUniqueRecipes(
-        maxBudget > 0
-          ? lunches.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
-          : lunches,
-        7
-      );
-
-      const selectedDinners = pickUniqueRecipes(
-        maxBudget > 0
-          ? dinners.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
-          : dinners,
-        7
-      );
-
-      console.log("6. recipes selected");
-
-      const planId = uuidv4();
-      const now = new Date().toISOString();
-
-      const { error: planError } = await supabase.from("meal_plan").insert({
-        id: planId,
-        user_id: req.userId,
-        name: "Weekly Meal Plan",
-        created_at: now,
-      });
-
-      console.log("7. meal_plan insert done", { planError });
-
-      if (planError) {
-        return res.status(500).json({ error: planError.message });
-      }
-
-      const items = [];
-
-      for (let day = 0; day < 7; day++) {
-        items.push({
-          id: uuidv4(),
-          plan_id: planId,
-          day,
-          meal_type: "breakfast",
-          recipe_id: selectedBreakfasts[day].id,
-          created_at: now,
-        });
-
-        items.push({
-          id: uuidv4(),
-          plan_id: planId,
-          day,
-          meal_type: "lunch",
-          recipe_id: selectedLunches[day].id,
-          created_at: now,
-        });
-
-        items.push({
-          id: uuidv4(),
-          plan_id: planId,
-          day,
-          meal_type: "dinner",
-          recipe_id: selectedDinners[day].id,
-          created_at: now,
-        });
-      }
-
-      console.log("8. inserting meal_plan_items", items.length);
-
-      const { error: itemsError } = await supabase
-        .from("meal_plan_items")
-        .insert(items);
-
-      console.log("9. meal_plan_items insert done", { itemsError });
-
-      if (itemsError) {
-        return res.status(500).json({ error: itemsError.message });
-      }
-
-      const result = items.map((item: any) => {
-        let recipe: any = null;
-
-        if (item.meal_type === "breakfast") recipe = selectedBreakfasts[item.day];
-        else if (item.meal_type === "lunch") recipe = selectedLunches[item.day];
-        else recipe = selectedDinners[item.day];
-
-        return {
-          day: item.day,
-          mealType: item.meal_type,
-          recipeId: item.recipe_id,
-          recipe: normalizeRecipe(recipe),
-        };
-      });
-
-      console.log("10. sending success response");
-      res.json({
-        success: true,
-        planId,
-        items: result,
-      });
-    } catch (err: any) {
-      console.error("generate route crashed:", err);
-      res.status(500).json({
-        error: err?.message || "Failed to generate meal plan",
-      });
-    }
-  }
-);
       const { items, name, startDate, endDate } = req.body;
 
       if (!Array.isArray(items)) {
@@ -614,6 +441,7 @@ async function startServer() {
       }
 
       const planId = uuidv4();
+      const now = new Date().toISOString();
 
       const { error: planError } = await supabase.from("meal_plan").insert({
         id: planId,
@@ -621,7 +449,7 @@ async function startServer() {
         name: name || "Weekly Meal Plan",
         start_date: startDate || null,
         end_date: endDate || null,
-        created_at: new Date().toISOString(),
+        created_at: now,
       });
 
       if (planError) {
@@ -634,7 +462,7 @@ async function startServer() {
         day: i.day,
         meal_type: i.mealType,
         recipe_id: i.recipeId,
-        created_at: new Date().toISOString(),
+        created_at: now,
       }));
 
       const { error: itemsError } = await supabase
@@ -656,15 +484,14 @@ async function startServer() {
     checkSubscription,
     async (req: any, res) => {
       try {
+        console.log("generate route hit");
+
         const { preferences = {} } = req.body;
-        const maxBudget = Number(preferences?.budget ?? 0);
+        console.log("preferences", preferences);
 
-        let query = supabase.from("recipes").select("*");
+        const { data: recipes, error } = await supabase.from("recipes").select("*");
 
-        // If your recipes table has is_active, this will help.
-       const { data: recipes, error } = await supabase.from("recipes").select("*");
-
-        const { data: recipes, error } = await query;
+        console.log("recipes fetched", recipes?.length, error);
 
         if (error) {
           return res.status(500).json({ error: error.message });
@@ -684,33 +511,21 @@ async function startServer() {
           (r: any) => String(r.meal_type).toLowerCase() === "dinner"
         );
 
+        console.log("grouped", {
+          breakfasts: breakfasts.length,
+          lunches: lunches.length,
+          dinners: dinners.length,
+        });
+
         if (breakfasts.length < 7 || lunches.length < 7 || dinners.length < 7) {
           return res.status(400).json({
-            error:
-              "You need at least 7 breakfast, 7 lunch, and 7 dinner recipes in the recipes table.",
+            error: "You need at least 7 breakfast, 7 lunch, and 7 dinner recipes.",
           });
         }
 
-        const selectedBreakfasts = pickUniqueRecipes(
-          maxBudget > 0
-            ? breakfasts.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
-            : breakfasts,
-          7
-        );
-
-        const selectedLunches = pickUniqueRecipes(
-          maxBudget > 0
-            ? lunches.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
-            : lunches,
-          7
-        );
-
-        const selectedDinners = pickUniqueRecipes(
-          maxBudget > 0
-            ? dinners.filter((r: any) => Number(r.estimated_cost ?? 0) <= maxBudget)
-            : dinners,
-          7
-        );
+        const selectedBreakfasts = pickUniqueRecipes(breakfasts, 7);
+        const selectedLunches = pickUniqueRecipes(lunches, 7);
+        const selectedDinners = pickUniqueRecipes(dinners, 7);
 
         const planId = uuidv4();
         const now = new Date().toISOString();
@@ -768,17 +583,12 @@ async function startServer() {
         const result = items.map((item: any) => {
           let recipe: any = null;
 
-          if (item.meal_type === "breakfast") {
-            recipe = selectedBreakfasts[item.day];
-          } else if (item.meal_type === "lunch") {
-            recipe = selectedLunches[item.day];
-          } else {
-            recipe = selectedDinners[item.day];
-          }
+          if (item.meal_type === "breakfast") recipe = selectedBreakfasts[item.day];
+          else if (item.meal_type === "lunch") recipe = selectedLunches[item.day];
+          else recipe = selectedDinners[item.day];
 
           return {
             day: item.day,
-            dayName: DAYS[item.day],
             mealType: item.meal_type,
             recipeId: item.recipe_id,
             recipe: normalizeRecipe(recipe),
