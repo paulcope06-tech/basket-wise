@@ -292,7 +292,7 @@ export default function App() {
 
         setMealPlan(mapped);
       } else {
-        await fetchMealPlanItems();
+      
       }
 
       setToast({
