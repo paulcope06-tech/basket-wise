@@ -12,6 +12,7 @@ type Ingredient = {
 };
 
 type AppRecipe = {
+  id?: string;
   title: string;
   description: string;
   prepTime: number;
@@ -22,12 +23,16 @@ type AppRecipe = {
   ingredients: Ingredient[];
   instructions: string[];
   imageUrl: string;
+  calories?: number;
+  tags?: string[];
 };
 
 type MealPlanItem = {
+  id?: string;
   day: number;
   mealType: MealType;
-  recipe: AppRecipe;
+  recipeId?: string;
+  recipe: AppRecipe | null;
 };
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -129,13 +134,36 @@ export default function App() {
     setToast({ message: 'Logged out.', type: 'success' });
   };
 
-  const mapRecipeFromRow = (item: any): AppRecipe => {
-    const rawRecipe = item?.recipe || {};
+  const getAccessToken = async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    return session?.access_token || '';
+  };
+
+  const mapRecipe = (rawRecipe: any): AppRecipe => {
+    if (!rawRecipe) {
+      return {
+        title: 'Untitled Recipe',
+        description: '',
+        prepTime: 10,
+        cookTime: 20,
+        costPerServing: 0,
+        estimatedCost: 0,
+        servings: 4,
+        ingredients: [],
+        instructions: ['No instructions available'],
+        imageUrl: '',
+        calories: 0,
+        tags: [],
+      };
+    }
 
     const instructions = Array.isArray(rawRecipe?.instructions)
       ? rawRecipe.instructions
-      : Array.isArray(rawRecipe?.method)
-      ? rawRecipe.method
+      : Array.isArray(rawRecipe?.steps)
+      ? rawRecipe.steps
       : typeof rawRecipe?.instructions === 'string'
       ? rawRecipe.instructions
           .split(/\d+\.\s+/)
@@ -144,18 +172,32 @@ export default function App() {
       : ['No instructions available'];
 
     const ingredients = Array.isArray(rawRecipe?.ingredients)
-      ? rawRecipe.ingredients.map((ing: any) => ({
-          name: ing?.name || 'Ingredient',
-          amount: String(ing?.amount ?? '1'),
-          unit: ing?.unit || '',
-          category: ing?.category || 'Cupboard',
-        }))
+      ? rawRecipe.ingredients.map((ing: any) => {
+          if (typeof ing === 'string') {
+            return {
+              name: ing,
+              amount: '',
+              unit: '',
+              category: 'Cupboard',
+            };
+          }
+
+          return {
+            name: ing?.name || 'Ingredient',
+            amount: String(ing?.amount ?? ''),
+            unit: ing?.unit || '',
+            category: ing?.category || 'Cupboard',
+          };
+        })
       : [];
 
-    const estimatedCost = Number(rawRecipe?.estimated_cost ?? rawRecipe?.estimatedCost ?? 2.5);
+    const estimatedCost = Number(
+      rawRecipe?.estimatedCost ?? rawRecipe?.costPerServing ?? rawRecipe?.estimated_cost ?? 0
+    );
 
     return {
-      title: rawRecipe?.title || item?.recipe_title || 'Untitled Recipe',
+      id: rawRecipe?.id,
+      title: rawRecipe?.title || 'Untitled Recipe',
       description: rawRecipe?.description || '',
       prepTime: Number(rawRecipe?.prepTime ?? rawRecipe?.prep_time ?? 10),
       cookTime: Number(rawRecipe?.cookTime ?? rawRecipe?.cook_time ?? 20),
@@ -165,56 +207,41 @@ export default function App() {
       ingredients,
       instructions,
       imageUrl: rawRecipe?.imageUrl || rawRecipe?.image_url || '',
+      calories: Number(rawRecipe?.calories ?? 0),
+      tags: Array.isArray(rawRecipe?.tags) ? rawRecipe.tags : [],
     };
   };
 
   const fetchMealPlanItems = async () => {
-    const { data, error } = await supabase
-      .from('meal_plan_items')
-      .select('day, meal_type, recipe_title, recipe, created_at')
-      .order('day', { ascending: true })
-      .order('created_at', { ascending: false });
+    try {
+      const token = await getAccessToken();
 
-    console.log('MEAL PLAN ITEMS:', data);
-    console.log('MEAL PLAN ITEMS ERROR:', error);
+      const res = await fetch('/api/meal-plan', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
-    if (error) {
-      setToast({ message: 'Failed to load meal plan.', type: 'error' });
-      return;
-    }
+      const data = await res.json();
 
-    const latestBySlot = new Map<string, any>();
-
-    for (const item of data || []) {
-      const key = `${item.day}-${item.meal_type}`;
-      if (!latestBySlot.has(key)) {
-        latestBySlot.set(key, item);
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to load meal plan');
       }
+
+      const mapped: MealPlanItem[] = (data || []).map((item: any) => ({
+        id: item.id,
+        day: Number(item.day),
+        mealType: item.mealType,
+        recipeId: item.recipeId,
+        recipe: item.recipe ? mapRecipe(item.recipe) : null,
+      }));
+
+      setMealPlan(mapped);
+    } catch (err: any) {
+      console.error('Failed to fetch meal plan', err);
+      setToast({ message: err?.message || 'Failed to load meal plan.', type: 'error' });
     }
-
-    const mapped: MealPlanItem[] = Array.from(latestBySlot.values()).map((item: any) => ({
-      day: item.day,
-      mealType: item.meal_type,
-      recipe: mapRecipeFromRow(item),
-    }));
-
-    setMealPlan(mapped);
-  };
-
-  const generateSingleRecipe = async (prompt: string) => {
-    const { data, error } = await supabase.functions.invoke('generate-recipe', {
-      body: { prompt },
-    });
-
-    console.log('FUNCTION DATA:', data);
-    console.log('FUNCTION ERROR:', error);
-
-    if (error) throw error;
-    if (!data?.success) {
-      throw new Error(data?.error || 'Recipe generation failed');
-    }
-
-    return data;
   };
 
   const handleGeneratePlan = async () => {
@@ -223,15 +250,41 @@ export default function App() {
     setLoading(true);
 
     try {
-      for (let day = 0; day < DAYS.length; day++) {
-        for (const mealType of MEAL_TYPES) {
-          const prompt = `Create one ${mealType} recipe for ${DAYS[day]} for a family of ${adults} adults and ${children} children, with a total weekly budget of £${budget}. Return valid JSON only with these fields: title, description, ingredients, instructions, prep_time, cook_time, servings, estimated_cost, image_url.`;
+      const token = await getAccessToken();
 
-          await generateSingleRecipe(prompt);
-        }
+      const res = await fetch('/api/generate-meal-plan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          preferences: {
+            budget,
+            adults,
+            children,
+          },
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to generate meal plan');
       }
 
-      await fetchMealPlanItems();
+      if (Array.isArray(data?.items)) {
+        const mapped: MealPlanItem[] = data.items.map((item: any) => ({
+          day: Number(item.day),
+          mealType: item.mealType,
+          recipeId: item.recipeId,
+          recipe: item.recipe ? mapRecipe(item.recipe) : null,
+        }));
+
+        setMealPlan(mapped);
+      } else {
+        await fetchMealPlanItems();
+      }
 
       setToast({
         message: 'Weekly plan generated successfully.',
@@ -378,7 +431,7 @@ export default function App() {
           <div className="bg-white rounded-3xl p-8 shadow-2xl text-center">
             <RefreshCw className="animate-spin text-[#15803d] mx-auto mb-4" size={36} />
             <p className="font-bold text-lg">Generating your meal plan...</p>
-            <p className="text-sm text-[#15803d]/70 mt-2">This can take a minute.</p>
+            <p className="text-sm text-[#15803d]/70 mt-2">This should be much faster now.</p>
           </div>
         </div>
       )}
@@ -434,11 +487,11 @@ export default function App() {
                           {type}
                         </span>
                         <p className="text-sm font-medium mt-1 line-clamp-3">
-                          {meal?.recipe.title || 'No meal'}
+                          {meal?.recipe?.title || 'No meal'}
                         </p>
                       </div>
 
-                      {meal && (
+                      {meal?.recipe && (
                         <div className="mt-3 space-y-2">
                           <div className="flex items-center gap-2 text-[11px] text-[#15803d]/70">
                             <Clock size={12} />
@@ -447,7 +500,7 @@ export default function App() {
 
                           <button
                             onClick={() => {
-                              setSelectedRecipe(meal.recipe);
+                              setSelectedRecipe(meal.recipe!);
                               setSelectedMealInfo({ day: dayIdx, type });
                             }}
                             className="w-full bg-[#15803d]/5 border border-[#15803d]/20 px-2 py-2 rounded-xl text-[11px] font-bold text-[#15803d] hover:bg-[#15803d] hover:text-white transition-colors"
@@ -532,10 +585,10 @@ export default function App() {
                 <h3 className="font-bold text-lg mb-3 border-b border-[#dcfce7] pb-2">Ingredients</h3>
                 <ul className="space-y-2">
                   {selectedRecipe.ingredients?.map((ing, idx) => (
-                    <li key={idx} className="flex justify-between text-sm">
+                    <li key={idx} className="flex justify-between text-sm gap-3">
                       <span>{ing.name}</span>
-                      <span className="text-[#15803d]/60">
-                        {ing.amount} {ing.unit}
+                      <span className="text-[#15803d]/60 text-right">
+                        {[ing.amount, ing.unit].filter(Boolean).join(' ')}
                       </span>
                     </li>
                   ))}
