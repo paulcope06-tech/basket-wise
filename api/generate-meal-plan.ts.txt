@@ -1,0 +1,212 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
+import { v4 as uuidv4 } from 'uuid';
+
+const supabaseUrl =
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  '';
+
+const supabaseServiceKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  '';
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+});
+
+function shuffleArray<T>(items: T[]) {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function pickUniqueRecipes(recipes: any[], count: number) {
+  if (recipes.length < count) {
+    throw new Error(`Not enough recipes. Needed ${count}, found ${recipes.length}.`);
+  }
+  return shuffleArray(recipes).slice(0, count);
+}
+
+function normalizeRecipe(recipe: any) {
+  if (!recipe) return null;
+
+  return {
+    id: recipe.id,
+    title: recipe.title || 'Untitled Recipe',
+    description: recipe.description || '',
+    prepTime: Number(recipe.prep_time ?? 10),
+    cookTime: Number(recipe.cook_time ?? 20),
+    costPerServing: Number(recipe.estimated_cost ?? 0),
+    estimatedCost: Number(recipe.estimated_cost ?? 0),
+    servings: Number(recipe.servings ?? 4),
+    ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
+    instructions: Array.isArray(recipe.instructions)
+      ? recipe.instructions
+      : typeof recipe.instructions === 'string'
+      ? recipe.instructions
+          .split(/\d+\.\s+/)
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      : ['No instructions available'],
+    imageUrl: recipe.image_url || '',
+    calories: Number(recipe.calories ?? 0),
+    tags:
+      recipe.plan_date?.tags ||
+      recipe.plan_data?.tags ||
+      recipe.plan?.tags ||
+      [],
+  };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({
+        error: 'Invalid token',
+        details: authError?.message,
+      });
+    }
+
+    const { data: recipes, error } = await supabase.from('recipes').select('*');
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (!recipes || recipes.length === 0) {
+      return res.status(400).json({ error: 'No recipes found in library' });
+    }
+
+    const breakfasts = recipes.filter(
+      (r: any) => String(r.meal_type).toLowerCase() === 'breakfast'
+    );
+    const lunches = recipes.filter(
+      (r: any) => String(r.meal_type).toLowerCase() === 'lunch'
+    );
+    const dinners = recipes.filter(
+      (r: any) => String(r.meal_type).toLowerCase() === 'dinner'
+    );
+
+    if (breakfasts.length < 7 || lunches.length < 7 || dinners.length < 7) {
+      return res.status(400).json({
+        error: 'You need at least 7 breakfast, 7 lunch, and 7 dinner recipes.',
+      });
+    }
+
+    const selectedBreakfasts = pickUniqueRecipes(breakfasts, 7);
+    const selectedLunches = pickUniqueRecipes(lunches, 7);
+    const selectedDinners = pickUniqueRecipes(dinners, 7);
+
+    const now = new Date().toISOString();
+
+    await supabase.from('meal_plan_items').delete().eq('user_id', user.id);
+    await supabase.from('meal_plans').delete().eq('user_id', user.id);
+
+    const planId = uuidv4();
+
+    const { error: planError } = await supabase.from('meal_plans').insert({
+      id: planId,
+      user_id: user.id,
+      name: 'Weekly Meal Plan',
+      created_at: now,
+    });
+
+    if (planError) {
+      return res.status(500).json({ error: planError.message });
+    }
+
+    const items = [];
+
+    for (let day = 0; day < 7; day++) {
+      items.push({
+        id: uuidv4(),
+        plan_id: planId,
+        user_id: user.id,
+        day,
+        meal_type: 'breakfast',
+        recipe_id: selectedBreakfasts[day].id,
+        created_at: now,
+      });
+
+      items.push({
+        id: uuidv4(),
+        plan_id: planId,
+        user_id: user.id,
+        day,
+        meal_type: 'lunch',
+        recipe_id: selectedLunches[day].id,
+        created_at: now,
+      });
+
+      items.push({
+        id: uuidv4(),
+        plan_id: planId,
+        user_id: user.id,
+        day,
+        meal_type: 'dinner',
+        recipe_id: selectedDinners[day].id,
+        created_at: now,
+      });
+    }
+
+    const { error: itemsError } = await supabase
+      .from('meal_plan_items')
+      .insert(items);
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const result = items.map((item: any) => {
+      let recipe: any = null;
+
+      if (item.meal_type === 'breakfast') recipe = selectedBreakfasts[item.day];
+      else if (item.meal_type === 'lunch') recipe = selectedLunches[item.day];
+      else recipe = selectedDinners[item.day];
+
+      return {
+        id: item.id,
+        day: item.day,
+        mealType: item.meal_type,
+        recipeId: item.recipe_id,
+        recipe: normalizeRecipe(recipe),
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      planId,
+      items: result,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: err?.message || 'Failed to generate meal plan',
+    });
+  }
+}

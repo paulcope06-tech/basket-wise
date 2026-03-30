@@ -1,0 +1,137 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl =
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  '';
+
+const supabaseServiceKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  '';
+
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  },
+});
+
+function normalizeRecipe(recipe: any) {
+  if (!recipe) return null;
+
+  return {
+    id: recipe.id,
+    title: recipe.title || 'Untitled Recipe',
+    description: recipe.description || '',
+    prepTime: Number(recipe.prep_time ?? 10),
+    cookTime: Number(recipe.cook_time ?? 20),
+    costPerServing: Number(recipe.estimated_cost ?? 0),
+    estimatedCost: Number(recipe.estimated_cost ?? 0),
+    servings: Number(recipe.servings ?? 4),
+    ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
+    instructions: Array.isArray(recipe.instructions)
+      ? recipe.instructions
+      : typeof recipe.instructions === 'string'
+      ? recipe.instructions
+          .split(/\d+\.\s+/)
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      : ['No instructions available'],
+    imageUrl: recipe.image_url || '',
+    calories: Number(recipe.calories ?? 0),
+    tags:
+      recipe.plan_date?.tags ||
+      recipe.plan_data?.tags ||
+      recipe.plan?.tags ||
+      [],
+  };
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({
+        error: 'Invalid token',
+        details: authError?.message,
+      });
+    }
+
+    const { data: latestPlan, error: latestPlanError } = await supabase
+      .from('meal_plans')
+      .select('id')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestPlanError) {
+      return res.status(500).json({ error: latestPlanError.message });
+    }
+
+    if (!latestPlan) {
+      return res.status(200).json([]);
+    }
+
+    const { data: items, error: itemsError } = await supabase
+      .from('meal_plan_items')
+      .select('id, plan_id, day, meal_type, recipe_id')
+      .eq('plan_id', latestPlan.id)
+      .order('day', { ascending: true });
+
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const recipeIds = Array.from(new Set((items || []).map((i: any) => i.recipe_id).filter(Boolean)));
+
+    let recipesById = new Map<string, any>();
+
+    if (recipeIds.length > 0) {
+      const { data: recipes, error: recipesError } = await supabase
+        .from('recipes')
+        .select('*')
+        .in('id', recipeIds);
+
+      if (recipesError) {
+        return res.status(500).json({ error: recipesError.message });
+      }
+
+      recipesById = new Map((recipes || []).map((r: any) => [r.id, r]));
+    }
+
+    const result = (items || []).map((item: any) => ({
+      id: item.id,
+      planId: item.plan_id,
+      day: Number(item.day),
+      mealType: item.meal_type,
+      recipeId: item.recipe_id,
+      recipe: item.recipe_id ? normalizeRecipe(recipesById.get(item.recipe_id)) : null,
+    }));
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: err?.message || 'Failed to fetch meal plan',
+    });
+  }
+}
